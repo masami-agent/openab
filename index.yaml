@@ -181,4 +181,16 @@ entries:
     urls:
     - https://github.com/thepagent/agent-broker/releases/download/agent-broker-0.1.1/agent-broker-0.1.1.tgz
     version: 0.1.1
-generated: "2026-04-06T06:39:21.263040534Z"
+  openab:
+  - apiVersion: v2
+    appVersion: 0.8.2-beta.5
+    created: "2026-05-01T00:39:03.943598885Z"
+    description: A lightweight, secure, cloud-native ACP harness that bridges Discord
+      and any ACP-compatible coding CLI.
+    digest: a6fb7007fe7c3070fc2e6c01fa6580ae409008e74b56c327abf9919ff6a98e69
+    name: openab
+    type: application
+    urls:
+    - https://github.com/masami-agent/openab/releases/download/openab-0.8.2-beta.5/openab-0.8.2-beta.5.tgz
+    version: 0.8.2-beta.5
+generated: "2026-05-01T00:39:03.94366033Z"
