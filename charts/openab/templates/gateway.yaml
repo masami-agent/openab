@@ -43,7 +43,6 @@ spec:
               protocol: TCP
           env:
             {{- if ($cfg.gateway).token }}
-            {{- $agentD := dict "ctx" $ "agent" $name "cfg" $cfg }}
             - name: GATEWAY_WS_TOKEN
               valueFrom:
                 secretKeyRef:
