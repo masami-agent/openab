@@ -133,6 +133,49 @@ Create a directory with three files:
 zip openab-teams-app.zip manifest.json outline.png color.png
 ```
 
+## Agent Authentication (Both Modes)
+
+Choose one Kiro authentication method before deploying either mode. For an
+unattended enterprise deployment, use `KIRO_API_KEY`. Create
+`openab-kiro-secret.yaml` and provision the value through your normal
+secret-management workflow:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openab-kiro
+type: Opaque
+stringData:
+  KIRO_API_KEY: "<YOUR_KIRO_API_KEY>"
+```
+
+Apply the Secret in the same namespace where Helm will install OAB:
+
+```bash
+kubectl apply -f openab-kiro-secret.yaml
+```
+
+Both mode-specific values below use `secretEnv` to inject the key into the OAB
+process and `[agent].env` to pass it through the ACP child's environment
+allowlist after `env_clear()`. The Kiro child necessarily receives this agent
+credential; it does not receive the separate `TEAMS_APP_SECRET`. Do not put
+either key in `[agent].inherit_env`, and prefer an external secret controller in
+production so plaintext values do not enter local files or shell history.
+
+If an API key is unavailable, remove the `KIRO_API_KEY` `secretEnv` entry and
+`[agent].env` line from the values for your chosen mode. Install OAB, confirm its
+PVC is `Bound`, then complete the image-provided device flow:
+
+```bash
+kubectl exec -it deployment/openab-kiro -- sh -c "$OPENAB_AGENT_AUTH_COMMAND"
+kubectl rollout restart deployment/openab-kiro
+```
+
+The PVC mounted at `/home/agent` preserves the resulting `~/.kiro` and
+`~/.local/share/kiro-cli` credentials across pod restarts. Device flow requires
+this one-time interactive bootstrap and is not a zero-touch first deployment.
+
 ## Step 4A: Deploy in Unified Mode (Recommended)
 
 Unified Mode routes Bot Framework webhooks directly to the OAB pod:
@@ -173,6 +216,9 @@ agents:
       TEAMS_APP_ID: "<YOUR_APPLICATION_ID>"
       TEAMS_OAUTH_ENDPOINT: "https://login.microsoftonline.com/<YOUR_TENANT_ID>/oauth2/v2.0/token"
     secretEnv:
+      - name: KIRO_API_KEY
+        secretName: openab-kiro
+        secretKey: KIRO_API_KEY
       - name: TEAMS_APP_SECRET
         secretName: openab-teams
         secretKey: TEAMS_APP_SECRET
@@ -188,6 +234,7 @@ agents:
       command = "kiro-cli"
       args = ["acp", "--trust-all-tools"]
       working_dir = "/home/agent"
+      env = { KIRO_API_KEY = "${KIRO_API_KEY}" }
 
       [pool]
       max_sessions = 10
@@ -445,6 +492,10 @@ allowlist:
 ```yaml
 agents:
   kiro:
+    secretEnv:
+      - name: KIRO_API_KEY
+        secretName: openab-kiro
+        secretKey: KIRO_API_KEY
     configToml: |
       [gateway]
       url = "ws://openab-gateway:8080/ws"
@@ -455,6 +506,7 @@ agents:
       command = "kiro-cli"
       args = ["acp", "--trust-all-tools"]
       working_dir = "/home/agent"
+      env = { KIRO_API_KEY = "${KIRO_API_KEY}" }
 
       [pool]
       max_sessions = 10
@@ -478,8 +530,10 @@ helm upgrade --install openab oci://ghcr.io/openabdev/charts/openab \
 
 Do not set `agents.kiro.gateway.enabled` here: that option asks the chart to
 deploy another Gateway, while this guide already created `openab-gateway`
-separately. The OAB pod needs only the WebSocket URL and trust configuration;
-it does not need the Teams client secret.
+separately. For platform connectivity, the OAB pod needs only the WebSocket URL
+and trust configuration; it still needs the Kiro credential configured in
+[Agent Authentication](#agent-authentication-both-modes), but it does not need
+the Teams client secret.
 
 ## Step 5: IT Admin — Approve the Teams App
 
