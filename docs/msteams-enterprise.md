@@ -195,8 +195,9 @@ agents:
 ```
 
 `secretEnv` injects the Secret into the OAB process so it can resolve the
-`[teams]` configuration. Do **not** add any `TEAMS_*` keys to
-`[agent].inherit_env`: the ACP agent does not need these adapter credentials,
+`[teams]` configuration. The pinned chart mounts `configToml` verbatim and does
+not automatically add `secretEnv` keys to `[agent].inherit_env`. Do **not** add
+any `TEAMS_*` keys there: the ACP agent does not need these adapter credentials,
 and inheriting them would make the secret accessible to prompts and tools.
 
 ### User Trust and Tenant Scope
@@ -219,8 +220,9 @@ allow_all_users = true
 
 Create `openab-teams-networking.yaml`. The selector must include the chart name,
 Helm release, and agent component. This example assumes the release name
-`openab`, used by the install command below; update the instance label if you
-choose another release name.
+`openab` and agent key `kiro` from `agents.kiro`, used by the install command
+below. If you change either value, update the instance or component label here
+and in the verification selector to match.
 
 ```yaml
 apiVersion: v1
