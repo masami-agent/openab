@@ -2,113 +2,11 @@
 
 Deploy OpenAB with MS Teams in an enterprise Kubernetes environment. This guide covers Azure Entra ID configuration, Azure Bot Service setup, Teams app packaging, and Kubernetes deployment.
 
-
-> **Unified Mode (v0.9.0+):** The OAB binary now embeds the Teams adapter
-> directly. No separate gateway container is needed -- Ingress routes to the OAB
-> pod on port 8080. Set credentials via the `[teams]` config section.
-> See [Unified Mode](#unified-mode-v090) below for the simplified architecture.
-
----
-
-## Unified Mode (v0.9.0+)
-
-Starting with v0.9.0, the recommended enterprise deployment uses Unified Mode:
-
-```
-Teams Client -> Bot Framework -> K8s Ingress (HTTPS) -> OAB Pod (:8080/webhook/teams)
-                                                          |
-                                            Single pod, no gateway needed
-```
-
-### Helm Values (Unified Mode)
-
-```yaml
-agents:
-  kiro:
-    persistence:
-      enabled: true
-      size: 1Gi
-    env:
-      TEAMS_APP_ID: "<YOUR_APPLICATION_ID>"
-      TEAMS_APP_SECRET: "<YOUR_CLIENT_SECRET>"
-      TEAMS_OAUTH_ENDPOINT: "https://login.microsoftonline.com/<YOUR_TENANT_ID>/oauth2/v2.0/token"
-    configToml: |
-      [teams]
-      app_id = "${TEAMS_APP_ID}"
-      app_secret = "${TEAMS_APP_SECRET}"
-      oauth_endpoint = "${TEAMS_OAUTH_ENDPOINT}"
-      allow_all_users = true
-
-      [agent]
-      command = "kiro-cli"
-      args = ["acp", "--trust-all-tools"]
-      working_dir = "/home/agent"
-      inherit_env = ["TEAMS_APP_ID", "TEAMS_APP_SECRET", "TEAMS_OAUTH_ENDPOINT"]
-
-      [pool]
-      max_sessions = 10
-      session_ttl_hours = 24
-```
-
-### User Trust (`[teams]` section)
-
-Identity trust defaults to deny-all (identity-trust-none ADR). Configure access:
-
-```toml
-[teams]
-# Allow all users in your tenant
-allow_all_users = true
-
-# Or restrict to specific users (find IDs in OAB logs)
-# allowed_users = ["29:1abc...", "29:2def..."]
-```
-
-### K8s Service + Ingress (Unified)
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: openab-kiro
-spec:
-  selector:
-    app.kubernetes.io/name: openab
-  ports:
-    - port: 8080
-      targetPort: 8080
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: openab-teams
-spec:
-  tls:
-    - hosts:
-        - <YOUR_INGRESS_HOST>
-      secretName: <YOUR_TLS_SECRET>
-  rules:
-    - host: <YOUR_INGRESS_HOST>
-      http:
-        paths:
-          - path: /webhook/teams
-            pathType: Prefix
-            backend:
-              service:
-                name: openab-kiro
-                port:
-                  number: 8080
-```
-
----
-
-## Standalone Gateway Mode (Legacy)
-
-
-```
-Teams Client → Bot Framework → K8s Ingress (HTTPS + TLS) → Gateway pod → OAB pod
-                                     ↑
-                        Company's existing infrastructure
-```
+> **Unified Mode (available since v0.9.0-beta.4; validated with v0.9.0-beta.10):**
+> The OAB binary embeds the Teams adapter, so no separate gateway container is
+> needed. Complete the prerequisites and Steps 1–3, then follow
+> [Step 4A](#step-4a-deploy-in-unified-mode-recommended). The stable `v0.9.0`
+> release is not yet available; the commands below pin the validated beta.
 
 ## Prerequisites
 
@@ -117,32 +15,6 @@ Teams Client → Bot Framework → K8s Ingress (HTTPS + TLS) → Gateway pod →
 - A Kubernetes cluster with an Ingress controller and TLS
 - `kubectl` CLI
 - IT admin access to Teams Admin Center (for app approval)
-
-### Architecture (Gateway Mode)
-
-The legacy deployment consists of two components:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Your Kubernetes Cluster                                    │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │   Ingress    │───▶│   Gateway    │◀──▶│     OAB      │  │
-│  │  (HTTPS/TLS) │    │  (BYO deploy)│ WS │  (Helm chart)│  │
-│  └──────┬───────┘    └──────────────┘    └──────────────┘  │
-│         │                                                   │
-└─────────┼───────────────────────────────────────────────────┘
-          │ HTTPS
-┌─────────┴───────────┐
-│  Bot Framework      │
-│  (Microsoft Cloud)  │
-└─────────────────────┘
-```
-
-| Component | Deployed by | Description |
-|---|---|---|
-| **Gateway** | You (K8s Deployment or Docker) | Receives Bot Framework webhooks, validates JWT, routes replies. Reads `TEAMS_*` env vars. |
-| **OAB** | Helm chart (`openab`) | Connects outbound to Gateway via WebSocket. No inbound ports needed. |
 
 ## Step 1: Register an Azure Entra ID Application
 
@@ -259,7 +131,180 @@ Create a directory with three files:
 zip openab-teams-app.zip manifest.json outline.png color.png
 ```
 
-## Step 4: Deploy the Gateway
+## Step 4A: Deploy in Unified Mode (Recommended)
+
+Unified Mode routes Bot Framework webhooks directly to the OAB pod:
+
+```
+Teams Client → Bot Framework → K8s Ingress (HTTPS) → OAB Pod (:8080/webhook/teams)
+```
+
+### Create the Teams Secret
+
+Create `openab-teams-secret.yaml` and provision the client secret through your
+normal secret-management workflow. Do not commit the populated file:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openab-teams
+type: Opaque
+stringData:
+  TEAMS_APP_SECRET: "<YOUR_CLIENT_SECRET>"
+```
+
+For production, prefer an external secret controller or another mechanism that
+keeps the secret value out of local files and shell history.
+
+### Helm Values
+
+Create `values.yaml`:
+
+```yaml
+agents:
+  kiro:
+    persistence:
+      enabled: true
+      size: 1Gi
+    env:
+      TEAMS_APP_ID: "<YOUR_APPLICATION_ID>"
+      TEAMS_OAUTH_ENDPOINT: "https://login.microsoftonline.com/<YOUR_TENANT_ID>/oauth2/v2.0/token"
+    secretEnv:
+      - name: TEAMS_APP_SECRET
+        secretName: openab-teams
+        secretKey: TEAMS_APP_SECRET
+    configToml: |
+      [teams]
+      app_id = "${TEAMS_APP_ID}"
+      app_secret = "${TEAMS_APP_SECRET}"
+      oauth_endpoint = "${TEAMS_OAUTH_ENDPOINT}"
+      allowed_tenants = ["<YOUR_TENANT_ID>"]
+      allowed_users = ["29:1abc..."]
+
+      [agent]
+      command = "kiro-cli"
+      args = ["acp", "--trust-all-tools"]
+      working_dir = "/home/agent"
+
+      [pool]
+      max_sessions = 10
+      session_ttl_hours = 24
+```
+
+`secretEnv` injects the Secret into the OAB process so it can resolve the
+`[teams]` configuration. Do **not** add any `TEAMS_*` keys to
+`[agent].inherit_env`: the ACP agent does not need these adapter credentials,
+and inheriting them would make the secret accessible to prompts and tools.
+
+### User Trust and Tenant Scope
+
+The recommended configuration restricts both the Azure AD tenant and individual
+Bot Framework sender IDs. Find each user's `29:…` sender ID in OAB logs and add
+it to `allowed_users`.
+
+To allow every user in the configured tenant instead, replace `allowed_users`
+with the explicit broad-access opt-in below. Keep `allowed_tenants`; otherwise,
+activities from other tenants also pass the tenant gate.
+
+```toml
+[teams]
+allowed_tenants = ["<YOUR_TENANT_ID>"]
+allow_all_users = true
+```
+
+### Service and Ingress
+
+Create `openab-teams-networking.yaml`. The selector must include the chart name,
+Helm release, and agent component. This example assumes the release name
+`openab`, used by the install command below; update the instance label if you
+choose another release name.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: openab-teams
+spec:
+  selector:
+    app.kubernetes.io/name: openab
+    app.kubernetes.io/instance: openab
+    app.kubernetes.io/component: kiro
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openab-teams
+spec:
+  tls:
+    - hosts:
+        - <YOUR_INGRESS_HOST>
+      secretName: <YOUR_TLS_SECRET>
+  rules:
+    - host: <YOUR_INGRESS_HOST>
+      http:
+        paths:
+          - path: /webhook/teams
+            pathType: Prefix
+            backend:
+              service:
+                name: openab-teams
+                port:
+                  number: 8080
+```
+
+Apply the resources and install the validated chart version:
+
+```bash
+kubectl apply -f openab-teams-secret.yaml
+helm upgrade --install openab oci://ghcr.io/openabdev/charts/openab \
+  --version 0.9.0-beta.10 \
+  -f values.yaml
+kubectl apply -f openab-teams-networking.yaml
+```
+
+### Verify Unified Mode
+
+1. Confirm exactly one pod matches the Service selector:
+   ```bash
+   kubectl get pods \
+     -l app.kubernetes.io/name=openab,app.kubernetes.io/instance=openab,app.kubernetes.io/component=kiro
+   ```
+2. Check startup logs with `kubectl logs deployment/openab-kiro` and verify the
+   Teams adapter is listening on `0.0.0.0:8080`.
+3. Send a message from an allowed Teams user and confirm a reply. A user or
+   tenant outside the configured allowlists must be rejected.
+
+## Step 4B: Deploy in Standalone Gateway Mode (Legacy)
+
+Use this mode only when you need the separate gateway architecture:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Your Kubernetes Cluster                                    │
+│                                                             │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   Ingress    │───▶│   Gateway    │◀──▶│     OAB      │  │
+│  │  (HTTPS/TLS) │    │  (BYO deploy)│ WS │  (Helm chart)│  │
+│  └──────┬───────┘    └──────────────┘    └──────────────┘  │
+│         │                                                   │
+└─────────┼───────────────────────────────────────────────────┘
+          │ HTTPS
+┌─────────┴───────────┐
+│  Bot Framework      │
+│  (Microsoft Cloud)  │
+└─────────────────────┘
+```
+
+| Component | Deployed by | Description |
+|---|---|---|
+| **Gateway** | You (K8s Deployment or Docker) | Receives Bot Framework webhooks, validates JWT, routes replies. Reads `TEAMS_*` env vars. |
+| **OAB** | Helm chart (`openab`) | Connects outbound to Gateway via WebSocket. No inbound ports needed. |
+
+### Deploy the Gateway
 
 The Gateway is deployed separately from the OAB Helm chart. Use a standard Kubernetes Deployment:
 
@@ -356,7 +401,7 @@ spec:
 
 > Bot Framework requires HTTPS. Your Ingress controller handles TLS termination — the Gateway pod listens on plain HTTP (:8080).
 
-## Step 5: Deploy OAB with Helm
+### Deploy OAB with Helm
 
 OAB connects outbound to the Gateway via WebSocket:
 
@@ -369,7 +414,7 @@ helm install openab oci://ghcr.io/openabdev/charts/openab \
 
 The OAB pod does not need any Teams credentials — it only needs the Gateway WebSocket URL.
 
-## Step 6: IT Admin — Approve the Teams App
+## Step 5: IT Admin — Approve the Teams App
 
 Enterprise tenants typically restrict custom app installation. An IT admin must approve the app.
 
@@ -412,7 +457,7 @@ After policy propagation (may take up to 24 hours):
 
 ## Tenant Allowlist
 
-Restrict which Azure AD tenants can interact with the bot by adding to the Gateway Secret:
+Unified Mode uses `[teams].allowed_tenants` as shown in Step 4A. In Standalone Gateway Mode, restrict which Azure AD tenants can interact with the bot by adding this value to the Gateway Secret:
 
 ```yaml
 stringData:
@@ -487,7 +532,7 @@ kubectl exec deployment/openab-gateway -- curl -s https://login.botframework.com
 - **Rotate client secrets** before expiration — set a reminder based on the expiration chosen in Step 1
 - **Use tenant allowlist** in production — restrict `TEAMS_ALLOWED_TENANTS` to your organization's tenant ID
 - **Network policies** — consider restricting Gateway pod egress to Bot Framework endpoints
-- **OAB pod has no inbound exposure** — connects outbound to Gateway only
+- **Minimize inbound exposure** — Unified Mode should expose only `/webhook/teams` through the TLS Ingress; in Standalone Gateway Mode, the OAB pod remains private and connects outbound to the Gateway only
 
 ## References
 
