@@ -168,7 +168,7 @@ If an API key is unavailable, remove the `KIRO_API_KEY` `secretEnv` entry and
 PVC is `Bound`, then complete the image-provided device flow:
 
 ```bash
-kubectl exec -it deployment/openab-kiro -- sh -c "$OPENAB_AGENT_AUTH_COMMAND"
+kubectl exec -it deployment/openab-kiro -- sh -c '$OPENAB_AGENT_AUTH_COMMAND'
 kubectl rollout restart deployment/openab-kiro
 ```
 
