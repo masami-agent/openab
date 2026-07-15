@@ -194,6 +194,18 @@ agents:
       session_ttl_hours = 24
 ```
 
+The example creates a 1 Gi PVC. If the cluster has no default StorageClass, set
+`agents.kiro.persistence.storageClass` or reuse a pre-provisioned claim with
+`agents.kiro.persistence.existingClaim`; otherwise the PVC and pod remain
+`Pending`. Confirm the claim is `Bound` with `kubectl get pvc` before testing.
+
+Kiro ACP runs non-interactively in the pod. `--trust-all-tools` prevents tool
+permission prompts from stalling a session, but it also auto-approves every tool
+request exposed to the agent. In production, prefer an explicit non-interactive
+trust policy that covers only required tools. If broad trust is retained, bound
+its authority with pod security controls, service-account/IAM permissions,
+network policies, and the tenant/user allowlists below.
+
 `secretEnv` injects the Secret into the OAB process so it can resolve the
 `[teams]` configuration. The pinned chart mounts `configToml` verbatim and does
 not automatically add `secretEnv` keys to `[agent].inherit_env`. Do **not** add
@@ -243,6 +255,7 @@ kind: Ingress
 metadata:
   name: openab-teams
 spec:
+  ingressClassName: <YOUR_INGRESS_CLASS>
   tls:
     - hosts:
         - <YOUR_INGRESS_HOST>
@@ -259,6 +272,11 @@ spec:
                 port:
                   number: 8080
 ```
+
+Set `<YOUR_INGRESS_CLASS>` to the installed controller class (for example,
+`nginx`, `alb`, or `traefik`). If the controller requires annotations, add its
+specific annotations as well; do not assume that a multi-class cluster will
+select this Ingress automatically.
 
 Apply the resources and install the validated chart version:
 
@@ -389,6 +407,7 @@ metadata:
     # Adjust for your Ingress controller (nginx, ALB, Traefik, etc.)
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
+  ingressClassName: <YOUR_INGRESS_CLASS>
   tls:
     - hosts:
         - <YOUR_INGRESS_HOST>
@@ -405,6 +424,9 @@ spec:
                 port:
                   number: 8080
 ```
+
+Set `<YOUR_INGRESS_CLASS>` to the installed controller class and replace or
+remove the nginx annotation to match that controller.
 
 > Bot Framework requires HTTPS. Your Ingress controller handles TLS termination — the Gateway pod listens on plain HTTP (:8080).
 
@@ -428,6 +450,15 @@ agents:
       url = "ws://openab-gateway:8080/ws"
       platform = "teams"
       allowed_users = ["29:1abc..."]
+
+      [agent]
+      command = "kiro-cli"
+      args = ["acp", "--trust-all-tools"]
+      working_dir = "/home/agent"
+
+      [pool]
+      max_sessions = 10
+      session_ttl_hours = 24
 ```
 
 The chart mounts `configToml` verbatim. The sample uses an explicit
@@ -590,7 +621,16 @@ kubectl run openab-metadata-check --rm -i --restart=Never \
 - **Credentials in Kubernetes Secrets** — never in ConfigMaps or Deployment manifests
 - **Rotate client secrets** before expiration — set a reminder based on the expiration chosen in Step 1
 - **Use a tenant allowlist** in production — configure `[teams].allowed_tenants` in Unified Mode or `TEAMS_ALLOWED_TENANTS` in Standalone Gateway Mode
-- **Network policies** — allow only the required Microsoft and agent endpoints for the exposed OAB pod in Unified Mode or the Gateway pod in Standalone Gateway Mode
+- **Network policies** — start from default-deny and allow cluster DNS plus
+  the minimum outbound destinations. The Teams adapter needs the configured
+  `login.microsoftonline.com` token endpoint, `login.botframework.com` metadata
+  and its returned JWKS host, and the HTTPS `serviceUrl` host supplied by each
+  validated Bot Framework activity (commonly `smba.trafficmanager.net`; the
+  host can vary by region). The OAB/ACP pod also needs the authentication/API
+  endpoints for the selected agent backend and any model or tool services it
+  uses. In Unified Mode these rules apply to the OAB pod. In Standalone Gateway
+  Mode, give the Gateway the Microsoft egress, allow OAB to reach
+  `openab-gateway:8080`, and give only OAB the agent/model/tool egress.
 - **Minimize inbound exposure** — Unified Mode should expose only `/webhook/teams` through the TLS Ingress; in Standalone Gateway Mode, the OAB pod remains private and connects outbound to the Gateway only
 
 ## References
