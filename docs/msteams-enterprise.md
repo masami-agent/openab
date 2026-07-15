@@ -330,6 +330,7 @@ stringData:
 ### Gateway Deployment
 
 ```yaml
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -377,6 +378,7 @@ spec:
 Route Bot Framework webhooks to the Gateway using your existing Ingress controller:
 
 ```yaml
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
