@@ -12,7 +12,9 @@ Deploy OpenAB with MS Teams in an enterprise Kubernetes environment. This guide 
 
 - An Azure subscription with permissions to create resources
 - A Microsoft 365 tenant with Teams enabled (Commercial Cloud Trial works for testing)
-- A Kubernetes cluster with an Ingress controller and TLS
+- A Kubernetes cluster with an Ingress controller
+- A publicly resolvable DNS hostname and valid TLS certificate for the Ingress
+- Helm 3 with OCI registry support
 - `kubectl` CLI
 - IT admin access to Teams Admin Center (for app approval)
 
@@ -306,7 +308,7 @@ Use this mode only when you need the separate gateway architecture:
 
 ### Deploy the Gateway
 
-The Gateway is deployed separately from the OAB Helm chart. Use a standard Kubernetes Deployment:
+The Gateway is deployed separately from the OAB Helm chart. Save the following Secret, Deployment/Service, and Ingress manifests together as `openab-gateway.yaml`:
 
 ### Gateway Secret
 
@@ -344,7 +346,7 @@ spec:
     spec:
       containers:
         - name: gateway
-          image: ghcr.io/openabdev/openab-gateway:0.9.0-beta.10
+          image: ghcr.io/openabdev/openab-gateway:0.5.4
           ports:
             - containerPort: 8080
           envFrom:
@@ -402,6 +404,12 @@ spec:
 
 > Bot Framework requires HTTPS. Your Ingress controller handles TLS termination — the Gateway pod listens on plain HTTP (:8080).
 
+Apply the standalone Gateway resources before installing OAB:
+
+```bash
+kubectl apply -f openab-gateway.yaml
+```
+
 ### Deploy OAB with Helm
 
 OAB connects outbound to the Gateway via WebSocket. Create
@@ -418,10 +426,12 @@ agents:
       allowed_users = ["29:1abc..."]
 ```
 
-The chart mounts `configToml` verbatim. The `allowed_users` entry is required by
-the default-deny identity trust gate; find each user's `29:…` sender ID in OAB
-logs. To admit every user that passed the Gateway's tenant check, use the
-explicit `allow_all_users = true` opt-in instead.
+The chart mounts `configToml` verbatim. The sample uses an explicit
+`allowed_users` list for least privilege; find each user's `29:…` sender ID in
+OAB logs. Legacy `[gateway]` compatibility defaults to allow-all when both
+`allow_all_users` and `allowed_users` are omitted, so do not omit this trust
+configuration. To admit every user that passed the Gateway's tenant check, use
+the explicit `allow_all_users = true` opt-in instead.
 
 Install the same pinned version used by the Gateway image:
 
@@ -488,20 +498,22 @@ stringData:
 
 Multiple tenants: `"<TENANT_ID_1>,<TENANT_ID_2>"`. If not set, all tenants are allowed.
 
-## Sovereign Cloud Configuration
+## Sovereign Cloud Limitation
 
-Use the endpoints for your cloud in both deployment modes. In Unified Mode,
-replace `TEAMS_OAUTH_ENDPOINT` in `agents.kiro.env` and add
-`TEAMS_OPENID_METADATA` there; the `[teams]` section resolves both variables.
-In Standalone Gateway Mode, add both values to the Gateway Secret.
+This guide currently supports the public Azure cloud only. Although the
+configuration exposes OAuth and OpenID metadata endpoint overrides, the Teams
+adapter in `v0.9.0-beta.10` still validates the public Bot Framework issuer and
+requests the public Bot Framework OAuth scope internally. Changing only
+`TEAMS_OAUTH_ENDPOINT` and `TEAMS_OPENID_METADATA` is therefore insufficient for
+Azure Government or Azure China. Do not use this deployment recipe in a
+sovereign cloud until the runtime makes the issuer and scope cloud-aware.
 
-| Cloud | `TEAMS_OAUTH_ENDPOINT` | `TEAMS_OPENID_METADATA` |
-|---|---|---|
-| Public (default) | `https://login.microsoftonline.com/<TENANT>/oauth2/v2.0/token` | `https://login.botframework.com/v1/.well-known/openidconfiguration` |
-| Azure Government | `https://login.microsoftonline.us/<TENANT>/oauth2/v2.0/token` | `https://login.botframework.azure.us/v1/.well-known/openidconfiguration` |
-| Azure China (21Vianet) | `https://login.partner.microsoftonline.cn/<TENANT>/oauth2/v2.0/token` | `https://login.botframework.azure.cn/v1/.well-known/openidconfiguration` |
+## Teams Adapter Environment Variables
 
-## Environment Variables Reference (Gateway)
+In Unified Mode, the `[teams]` section resolves these variables from the OAB
+process; inject `TEAMS_APP_SECRET` with `secretEnv`. In Standalone Gateway Mode,
+set them on the Gateway through `openab-gateway-teams`. User trust remains in
+the OAB `configToml` shown for each mode.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -535,6 +547,19 @@ IT admin has not approved the custom app, or permission policy hasn't propagated
 2. Check Permission policies allow the custom app
 3. Wait up to 24 hours for policy propagation
 
+### Unified Mode receives webhook but no reply in Teams
+
+Check the Ingress and embedded adapter logs:
+
+```bash
+kubectl describe ingress openab-teams
+kubectl logs deployment/openab-kiro --tail=50
+```
+
+Confirm that `/webhook/teams` routes to Service `openab-teams`, the Service has
+one ready endpoint, and the sender matches both `[teams].allowed_tenants` and
+`[teams].allowed_users`.
+
 ### Standalone Gateway receives webhook but no reply in Teams
 
 Check Gateway pod logs:
@@ -546,18 +571,14 @@ Look for: `teams → gateway` (received) → `gateway → teams` (sent) → `tea
 
 ### JWT validation failed
 
-The Teams adapter auto-refreshes JWKS on cache miss. If failures persist, verify
-that the OpenID metadata endpoint configured for your cloud is reachable from
-the component that receives the webhook:
+The Teams adapter auto-refreshes JWKS on cache miss. For the supported public
+Azure cloud, verify that the metadata endpoint is reachable from the Kubernetes
+namespace without assuming that the OpenAB or Gateway image contains `curl`:
 
 ```bash
-# Unified Mode
-kubectl exec deployment/openab-kiro -- \
-  curl -s https://login.botframework.com/v1/.well-known/openidconfiguration
-
-# Standalone Gateway Mode
-kubectl exec deployment/openab-gateway -- \
-  curl -s https://login.botframework.com/v1/.well-known/openidconfiguration
+kubectl run openab-metadata-check --rm -i --restart=Never \
+  --image=curlimages/curl:8.14.1 -- \
+  https://login.botframework.com/v1/.well-known/openidconfiguration
 ```
 
 ## Security Considerations
@@ -565,7 +586,7 @@ kubectl exec deployment/openab-gateway -- \
 - **Credentials in Kubernetes Secrets** — never in ConfigMaps or Deployment manifests
 - **Rotate client secrets** before expiration — set a reminder based on the expiration chosen in Step 1
 - **Use a tenant allowlist** in production — configure `[teams].allowed_tenants` in Unified Mode or `TEAMS_ALLOWED_TENANTS` in Standalone Gateway Mode
-- **Network policies** — consider restricting Gateway pod egress to Bot Framework endpoints
+- **Network policies** — allow only the required Microsoft and agent endpoints for the exposed OAB pod in Unified Mode or the Gateway pod in Standalone Gateway Mode
 - **Minimize inbound exposure** — Unified Mode should expose only `/webhook/teams` through the TLS Ingress; in Standalone Gateway Mode, the OAB pod remains private and connects outbound to the Gateway only
 
 ## References
