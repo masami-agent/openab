@@ -435,7 +435,7 @@ OAB logs. Legacy `[gateway]` compatibility defaults to allow-all when both
 configuration. To admit every user that passed the Gateway's tenant check, use
 the explicit `allow_all_users = true` opt-in instead.
 
-Install the same pinned version used by the Gateway image:
+Install the chart version validated with Gateway 0.5.4:
 
 ```bash
 helm upgrade --install openab oci://ghcr.io/openabdev/charts/openab \
