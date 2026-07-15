@@ -2,6 +2,108 @@
 
 Deploy OpenAB with MS Teams in an enterprise Kubernetes environment. This guide covers Azure Entra ID configuration, Azure Bot Service setup, Teams app packaging, and Kubernetes deployment.
 
+
+> **Unified Mode (v0.9.0+):** The OAB binary now embeds the Teams adapter
+> directly. No separate gateway container is needed -- Ingress routes to the OAB
+> pod on port 8080. Set credentials via the `[teams]` config section.
+> See [Unified Mode](#unified-mode-v090) below for the simplified architecture.
+
+---
+
+## Unified Mode (v0.9.0+)
+
+Starting with v0.9.0, the recommended enterprise deployment uses Unified Mode:
+
+```
+Teams Client -> Bot Framework -> K8s Ingress (HTTPS) -> OAB Pod (:8080/webhook/teams)
+                                                          |
+                                            Single pod, no gateway needed
+```
+
+### Helm Values (Unified Mode)
+
+```yaml
+agents:
+  kiro:
+    persistence:
+      enabled: true
+      size: 1Gi
+    env:
+      TEAMS_APP_ID: "<YOUR_APPLICATION_ID>"
+      TEAMS_APP_SECRET: "<YOUR_CLIENT_SECRET>"
+      TEAMS_OAUTH_ENDPOINT: "https://login.microsoftonline.com/<YOUR_TENANT_ID>/oauth2/v2.0/token"
+    configToml: |
+      [teams]
+      app_id = "${TEAMS_APP_ID}"
+      app_secret = "${TEAMS_APP_SECRET}"
+      oauth_endpoint = "${TEAMS_OAUTH_ENDPOINT}"
+      allow_all_users = true
+
+      [agent]
+      command = "kiro-cli"
+      args = ["acp", "--trust-all-tools"]
+      working_dir = "/home/agent"
+      inherit_env = ["TEAMS_APP_ID", "TEAMS_APP_SECRET", "TEAMS_OAUTH_ENDPOINT"]
+
+      [pool]
+      max_sessions = 10
+      session_ttl_hours = 24
+```
+
+### User Trust (`[teams]` section)
+
+Identity trust defaults to deny-all (identity-trust-none ADR). Configure access:
+
+```toml
+[teams]
+# Allow all users in your tenant
+allow_all_users = true
+
+# Or restrict to specific users (find IDs in OAB logs)
+# allowed_users = ["29:1abc...", "29:2def..."]
+```
+
+### K8s Service + Ingress (Unified)
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: openab-kiro
+spec:
+  selector:
+    app.kubernetes.io/name: openab
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openab-teams
+spec:
+  tls:
+    - hosts:
+        - <YOUR_INGRESS_HOST>
+      secretName: <YOUR_TLS_SECRET>
+  rules:
+    - host: <YOUR_INGRESS_HOST>
+      http:
+        paths:
+          - path: /webhook/teams
+            pathType: Prefix
+            backend:
+              service:
+                name: openab-kiro
+                port:
+                  number: 8080
+```
+
+---
+
+## Standalone Gateway Mode (Legacy)
+
+
 ```
 Teams Client → Bot Framework → K8s Ingress (HTTPS + TLS) → Gateway pod → OAB pod
                                      ↑
@@ -16,9 +118,9 @@ Teams Client → Bot Framework → K8s Ingress (HTTPS + TLS) → Gateway pod →
 - `kubectl` CLI
 - IT admin access to Teams Admin Center (for app approval)
 
-## Architecture Overview
+### Architecture (Gateway Mode)
 
-The deployment consists of two components:
+The legacy deployment consists of two components:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
