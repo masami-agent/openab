@@ -130,7 +130,11 @@ impl ChatAdapter for UnifiedGatewayAdapter {
     }
 
     fn message_limit(&self) -> usize {
-        4096 // conservative limit across platforms
+        // Unified Mode serves multiple platforms (Teams, LINE, Telegram, etc.)
+        // with different limits. Use the most conservative (LINE = 5000,
+        // Telegram = 4096). Platform-specific budgets require a future
+        // channel-aware message_limit_for() API.
+        4096
     }
 
     async fn send_message(&self, channel: &ChannelRef, content: &str) -> Result<MessageRef> {

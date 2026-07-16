@@ -499,7 +499,10 @@ impl ChatAdapter for GatewayAdapter {
     }
 
     fn message_limit(&self) -> usize {
-        4096 // Telegram limit
+        match self.platform_name {
+            "teams" => 20000, // Teams ~80 KB UTF-16; 20000 BMP chars ≈ 40 KB (safe margin)
+            _ => 4096,        // Telegram / generic limit
+        }
     }
 
     async fn send_message(&self, channel: &ChannelRef, content: &str) -> Result<MessageRef> {

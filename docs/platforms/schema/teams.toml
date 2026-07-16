@@ -126,7 +126,8 @@ pr      = ""
 [[openab_features]]
 feature = "message_split"
 status  = "partial"
-note    = "Core splits via `split_delivery`; `GatewayAdapter::message_limit()` returns 4096 (hardcoded 'Telegram limit', not Teams' ~100 KB / UTF-16 budget) — chunking works but the bound is generic, not Teams-tuned."
+pr      = "#1410"
+note    = "Core splits via `split_delivery`; standalone `GatewayAdapter` returns 20000 for Teams (BMP-char budget ≈ 40 KB UTF-16). Unified Mode remains at 4096 (shared with LINE/Telegram) pending a channel-aware `message_limit_for()` API."
 source  = ["crates/openab-core/src/adapter.rs#message_limit", "crates/openab-core/src/gateway.rs"]
 pr      = ""
 
